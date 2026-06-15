@@ -1,0 +1,12 @@
+{
+  "name": "pommi",
+  "version": "1.0.0",
+  "description": "Aapeli Bombermania -tyylinen pommipeli",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
