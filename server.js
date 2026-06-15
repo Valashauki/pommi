@@ -1,14 +1,18 @@
-const express = require('express');
 const http = require('http');
-const { Server } = require('socket.io');
+const fs = require('fs');
 const path = require('path');
+const { Server } = require('socket.io');
 
-const app = express();
-const server = http.createServer(app);
+const server = http.createServer((req, res) => {
+  const filePath = path.join(__dirname, 'index.html');
+  fs.readFile(filePath, (err, data) => {
+    if (err) { res.writeHead(500); res.end('Error loading game'); return; }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(data);
+  });
+});
+
 const io = new Server(server);
-
-app.use(express.static(path.join(__dirname)));
-
 const rooms = new Map();
 
 function makeCode() {
