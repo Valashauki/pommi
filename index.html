@@ -83,6 +83,11 @@
     touch-action:none; box-shadow:0 0 22px rgba(255,80,40,.4); }
   #bombBtn:active { transform:scale(.92); }
   .hint { font-size:11px; color:#5f6d92; margin-top:10px; text-align:center; max-width:560px; line-height:1.5; }
+  /* Online panel */
+  #onlinePanel { background:rgba(20,40,20,.5); border:1px solid rgba(61,220,151,.25); border-radius:12px; padding:10px 14px; display:flex; flex-direction:column; align-items:center; gap:7px; min-width:260px; }
+  #roomCodeBig { font-size:34px; font-weight:900; letter-spacing:8px; color:#3ddc97; text-shadow:0 0 18px rgba(61,220,151,.5); }
+  #onlineMsg { font-size:11px; color:#8ea0c8; min-height:14px; }
+  #joinInput { text-transform:uppercase; letter-spacing:6px; font-size:20px; width:160px; }
   @media (max-width:560px){ h1{font-size:21px;}
     #dpad{grid-template-columns:repeat(3,46px);grid-template-rows:repeat(3,46px);} #bombBtn{width:72px;height:72px;} }
 </style>
@@ -136,6 +141,22 @@
             <button class="opt" data-diff="hard">Hard</button>
           </div>
         </div>
+
+        <!-- Online multiplayer -->
+        <div class="group">
+          <span class="glabel">🌐 Online-moninpeli</span>
+          <div class="row">
+            <button class="opt" id="createRoomBtn">Luo huone</button>
+            <button class="opt" id="joinRoomBtn">Liity huoneeseen</button>
+          </div>
+          <div id="onlinePanel" style="display:none">
+            <div id="roomCodeBig" style="display:none"></div>
+            <input id="joinInput" class="nameinput" placeholder="KOODI" maxlength="4" style="display:none">
+            <button class="opt" id="joinConfirmBtn" style="display:none">Liity peliin</button>
+            <div id="onlineMsg"></div>
+          </div>
+        </div>
+
         <button id="startBtn">START</button>
       </div>
     </div>
@@ -164,6 +185,7 @@
   </div>
   <div class="hint">P1: WASD liiku · Väli pommi · kyvyt 1–8 — P2: nuolet liiku · Enter pommi · kyvyt U I O P H J K L · R = uusi peli · Kyvyillä on rajallinen määrä — voitosta saat satunnaisen kyvyn lisää.</div>
 
+<script src="/socket.io/socket.io.js"></script>
 <script>
 // localStorage polyfill for window.storage API
 window.storage = {
@@ -171,6 +193,44 @@ window.storage = {
   set: async (key, value) => { localStorage.setItem(key, value); }
 };
 
+// ---------- Online state ----------
+let onlineRole = null; // 'host' | 'guest' | null
+let onlinePlayerIdx = 0;
+let netLastSend = 0;
+let pendingGuestAbilities = [];
+
+const socket = io();
+
+socket.on('guest-joined', () => {
+  $('onlineMsg').textContent = '✅ Kaveri liittyi! Peli alkaa...';
+  setTimeout(() => {
+    onlineRole = 'host';
+    onlinePlayerIdx = 0;
+    numHumans = 1; // host controls P1 locally; P2 comes from network
+    startGame();
+  }, 800);
+});
+
+socket.on('net-state', state => {
+  if (onlineRole !== 'guest') return;
+  applyNetState(state);
+});
+
+socket.on('net-input', ({ dirs, bomb, abilities }) => {
+  if (onlineRole !== 'host') return;
+  humanDirs[1] = dirs || [];
+  if (bomb) req.bomb[1] = true;
+  if (abilities) for (const ab of abilities) if (req[ab]) req[ab][1] = true;
+});
+
+socket.on('player-left', () => {
+  onlineRole = null;
+  onlinePlayerIdx = 0;
+  alert('Toinen pelaaja poistui pelistä.');
+  showOverlay();
+});
+
+// ---------- Game constants ----------
 let COLS=13, ROWS=11; const TILE=40; let W=COLS*TILE, H=ROWS*TILE;
 const MAP_SIZES={ small:[13,11], medium:[17,13], large:[21,15] };
 let mapSize='small';
@@ -245,6 +305,70 @@ function centerCell(e){
            y:Math.max(0,Math.min(ROWS-1,Math.floor(e.py/TILE))) };
 }
 
+// ---------- Network state serialization ----------
+function buildNetState(){
+  return {
+    COLS, ROWS,
+    grid: grid.map(r=>[...r]),
+    players: players.map(p=>({
+      id:p.id, px:p.px, py:p.py, color:p.color, name:p.name,
+      isBot:p.isBot, alive:p.alive, moving:p.moving, dir:p.dir,
+      kills:p.kills, deaths:p.deaths, speed:p.speed, baseSpeed:p.baseSpeed,
+      maxBombs:p.maxBombs, range:p.range, speedLvl:p.speedLvl, bombsActive:p.bombsActive,
+      shieldTimer:p.shieldTimer, phaseTimer:p.phaseTimer, invisTimer:p.invisTimer,
+      speedTimer:p.speedTimer, respawnTimer:p.respawnTimer, invuln:p.invuln, anim:p.anim,
+      abilities:{...(p.abilities||{})}, firstname:p.firstname,
+      totalScore:p.profile?p.profile.totalScore:null
+    })),
+    bombs: bombs.map(b=>({
+      gx:b.gx, gy:b.gy, fuse:b.fuse, range:b.range, kind:b.kind,
+      oi:b.owner?players.indexOf(b.owner):-1
+    })),
+    flames: flames.map(f=>({
+      gx:f.gx, gy:f.gy, delay:f.delay, life:f.life, maxLife:f.maxLife,
+      kind:f.kind, destroysBlock:f.destroysBlock
+    })),
+    powerups:{...powerups},
+    sudden, suddenBanner, gameOver, shake,
+    lights: lights.map(L=>({oi:players.indexOf(L.owner), t:L.t})),
+    rockFx:[...rockFx],
+    gameOverTitle: gameOver ? ovTitle.textContent : null,
+    gameOverMsg: gameOver ? ovMsg.innerHTML : null
+  };
+}
+
+function applyNetState(s){
+  if(!s||!s.players) return;
+  COLS=s.COLS; ROWS=s.ROWS; W=COLS*TILE; H=ROWS*TILE;
+  if(canvas.width!==W||canvas.height!==H){canvas.width=W;canvas.height=H;}
+  grid=s.grid.map(r=>[...r]);
+  players=s.players.map(p=>({
+    ...p,
+    profile: p.totalScore!=null ? {totalScore:p.totalScore, prefix:'', abilities:p.abilities||{}} : null,
+    targetCell:null
+  }));
+  human=players[0];
+  bombs=s.bombs.map(b=>({
+    ...b, done:false,
+    owner:b.oi>=0&&players[b.oi]?players[b.oi]:null,
+    pass:new Set(), countsToLimit:false
+  }));
+  flames=s.flames.map(f=>({...f, owner:null}));
+  powerups={...s.powerups};
+  sudden=s.sudden; suddenBanner=s.suddenBanner; shake=s.shake;
+  lights=s.lights.filter(L=>L.oi>=0&&players[L.oi]).map(L=>({owner:players[L.oi],t:L.t}));
+  rockFx=[...s.rockFx];
+  if(s.gameOver&&!gameOver){
+    gameOver=true; running=false;
+    ovTitle.textContent=s.gameOverTitle||'Peli päättyi';
+    ovMsg.innerHTML=s.gameOverMsg||'';
+    document.getElementById('startBtn').textContent='PELAA UUDESTAAN';
+    overlay.classList.remove('hidden');
+  } else if(!s.gameOver) {
+    gameOver=false;
+  }
+}
+
 // ---------- Profiles (persistent) ----------
 const profileCache={};
 async function loadOrCreateProfile(firstname){
@@ -312,13 +436,17 @@ function buildBoard(humanProfiles){
       else grid[y][x]= Math.random()<SOFT_PROB ? SOFT : EMPTY;
     }
   }
-  const total=Math.min(numHumans+numBots, PALETTE.length);
+  // In online host mode, we need 2 human slots + bots
+  const onlineExtraHuman = onlineRole === 'host' ? 1 : 0;
+  const total=Math.min(numHumans+onlineExtraHuman+numBots, PALETTE.length);
   const spawns=generateSpawns(total);
   for(const s of spawns) clearSpawn(s.x,s.y);
   players=[];
   for(let i=0;i<spawns.length;i++){
     const gx=spawns[i].x, gy=spawns[i].y;
-    const isHuman = i<numHumans, bot=!isHuman;
+    const localHumans = numHumans + onlineExtraHuman;
+    const isHuman = i < localHumans;
+    const bot = !isHuman;
     let name, abilities, firstname=null, profile=null;
     if(isHuman){
       const hp=humanProfiles[i];
@@ -667,6 +795,15 @@ function typingInName(){ const a=document.activeElement; return a && a.classList
 window.addEventListener('keydown',e=>{
   if(typingInName()) return;
   const k=e.key, lk=(k||'').toLowerCase();
+
+  if(onlineRole==='guest'){
+    if(k===' '||e.code==='Space'){ e.preventDefault(); req.bomb[0]=true; return; }
+    if(WASD[lk]!==undefined){ e.preventDefault(); setDir(0,WASD[lk],true); return; }
+    if(P1NUM[k]){ pendingGuestAbilities.push(P1NUM[k]); return; }
+    if(lk==='r'&&gameOver){ showOverlay(); return; }
+    return;
+  }
+
   if(k===' '||e.code==='Space'){ e.preventDefault(); req.bomb[0]=true; return; }
   if(k==='Enter'){ e.preventDefault(); if(numHumans===2) req.bomb[1]=true; return; }
   if(WASD[lk]!==undefined){ e.preventDefault(); setDir(0,WASD[lk],true); return; }
@@ -739,17 +876,22 @@ function update(dt){
   }
 
   const danger=buildDanger();
+  // How many humans the host controls locally
+  const localHumans = onlineRole === 'host' ? numHumans : numHumans;
   for(const p of players){
     if(!p.alive) continue;
     if(p.isBot){ botThink(p, dt, danger); }
     else {
+      // In online host mode, player[1] is controlled by guest inputs (humanDirs[1])
       const dirs=humanDirs[p.id]; const dir=dirs[dirs.length-1];
       if(dir){ p.dir=dir; const mult=p.speedTimer>0?SPEEDBOOST_MULT:1; moveDir(p, dir, p.speed*mult*TILE*dt); p.moving=true; }
       else p.moving=false;
     }
     if(p.moving) p.anim+=dt;
   }
-  for(let hi=0; hi<numHumans; hi++){
+  // Process human/network actions
+  const maxHi = onlineRole === 'host' ? numHumans + 1 : numHumans;
+  for(let hi=0; hi<maxHi; hi++){
     const p=players[hi]; if(!p) continue;
     const ab=p.abilities||{};
     if(req.bomb[hi]){ req.bomb[hi]=false; if(p.alive){ const c=centerCell(p); placeBomb(p,c.x,c.y); } }
@@ -941,6 +1083,12 @@ function draw(){
       ctx.fillStyle=`rgba(80,200,255,0.13)`; ctx.fillRect(px-s,py-s,2*s,2*s);
       ctx.strokeStyle=`rgba(90,210,255,${a})`; ctx.lineWidth=3; ctx.strokeRect(px-s,py-s,2*s,2*s);
     }
+    // Show "YOU" label for online player's own character
+    if(onlineRole && p.id===onlinePlayerIdx){
+      ctx.fillStyle='#ffd23d'; ctx.font='bold 9px sans-serif';
+      ctx.textAlign='center'; ctx.textBaseline='bottom';
+      ctx.fillText('YOU', px, py-16+bob);
+    }
   }
   if(suddenBanner>0){
     const a=Math.min(1,suddenBanner/0.4);
@@ -999,14 +1147,18 @@ function renderHud(){
 }
 function buildAbilityPanels(){
   const cont=document.getElementById('abilPanels'); cont.innerHTML='';
-  for(let hi=0; hi<numHumans; hi++){
-    const p=players[hi]; if(!p) continue;
-    const keys = hi===0 ? P1KEYS : P2KEYS;
+  // In online mode show only own player's panel
+  const indices = onlineRole
+    ? [onlinePlayerIdx]
+    : Array.from({length:numHumans},(_,i)=>i);
+  for(const actualIdx of indices){
+    const p=players[actualIdx]; if(!p) continue;
+    const keys = P1KEYS;
     const panel=document.createElement('div');
     panel.className='abilPanel';
-    let html=`<div class="panelHdr" style="color:${p.color}">P${hi+1}: ${p.name}</div>`;
+    let html=`<div class="panelHdr" style="color:${p.color}">${p.name}</div>`;
     for(const a of ABILITIES){
-      html += `<div class="abilrow" data-pi="${hi}" data-ab="${a.key}">
+      html += `<div class="abilrow" data-pi="${actualIdx}" data-ab="${a.key}">
         <div class="abi">${a.icon}</div>
         <div class="abc"><span class="abn">${a.name}</span><span class="abk">Näppäin ${keys[a.key]}</span></div>
         <div class="abq">0</div></div>`;
@@ -1017,6 +1169,7 @@ function buildAbilityPanels(){
   cont.querySelectorAll('.abilrow').forEach(el=>{
     el.addEventListener('pointerdown',e=>{e.preventDefault();
       const pi=+el.dataset.pi, ab=el.dataset.ab;
+      if(onlineRole==='guest'){ pendingGuestAbilities.push(ab); return; }
       if(req[ab]) req[ab][pi]=true;
     });
   });
@@ -1041,8 +1194,29 @@ function updateAbilityUI(){
 // ---------- Loop ----------
 function frame(t){
   const dt=Math.min(0.04,(t-last)/1000||0); last=t;
-  if(running && !gameOver) update(dt);
-  draw(); renderHud(); updateAbilityUI();
+
+  if(onlineRole==='guest'){
+    // Guest: send inputs, render received state
+    if(t - netLastSend > 50){
+      socket.emit('net-input', {
+        dirs: [...humanDirs[0]],
+        bomb: req.bomb[0],
+        abilities: [...pendingGuestAbilities]
+      });
+      req.bomb[0]=false;
+      pendingGuestAbilities=[];
+      netLastSend=t;
+    }
+    if(players){ draw(); renderHud(); updateAbilityUI(); }
+  } else {
+    if(running && !gameOver) update(dt);
+    draw(); renderHud(); updateAbilityUI();
+    // Host: broadcast state every 50ms
+    if(onlineRole==='host' && running && t - netLastSend > 50){
+      socket.emit('net-state', buildNetState());
+      netLastSend=t;
+    }
+  }
   requestAnimationFrame(frame);
 }
 
@@ -1080,11 +1254,50 @@ async function showSaved(inputId, noteId){
 $('p1name').addEventListener('input',()=>showSaved('p1name','p1saved'));
 $('p2name').addEventListener('input',()=>showSaved('p2name','p2saved'));
 
+// ---------- Online UI ----------
+$('createRoomBtn').addEventListener('click',()=>{
+  $('onlinePanel').style.display='flex';
+  $('joinInput').style.display='none';
+  $('joinConfirmBtn').style.display='none';
+  $('roomCodeBig').style.display='none';
+  $('onlineMsg').textContent='Luodaan huonetta...';
+  socket.emit('create-room', ({ code }) => {
+    $('roomCodeBig').textContent=code;
+    $('roomCodeBig').style.display='block';
+    $('onlineMsg').textContent='Jaa tämä koodi kaverillesi!';
+  });
+});
+
+$('joinRoomBtn').addEventListener('click',()=>{
+  $('onlinePanel').style.display='flex';
+  $('roomCodeBig').style.display='none';
+  $('joinInput').style.display='block';
+  $('joinInput').value='';
+  $('joinConfirmBtn').style.display='block';
+  $('onlineMsg').textContent='Syötä kaverin antama koodi';
+});
+
+$('joinConfirmBtn').addEventListener('click',()=>{
+  const code=($('joinInput').value||'').trim().toUpperCase();
+  if(code.length<4){ $('onlineMsg').textContent='Koodi on 4 merkkiä'; return; }
+  $('onlineMsg').textContent='Liitytään...';
+  socket.emit('join-room', { code }, ({ ok, error }) => {
+    if(error){ $('onlineMsg').textContent='❌ '+error; return; }
+    onlineRole='guest';
+    onlinePlayerIdx=1;
+    $('onlineMsg').textContent='✅ Liitytty! Odotetaan isäntää...';
+    $('joinInput').style.display='none';
+    $('joinConfirmBtn').style.display='none';
+  });
+});
+
+// ---------- Start / overlay ----------
 function showOverlay(){
-  gameOver=false; running=false;
+  gameOver=false; running=false; onlineRole=null; onlinePlayerIdx=0;
   ovTitle.textContent='Ready?'; ovTitle.style.color='#e8eefc';
   ovMsg.textContent="Räjäytä tiilet, kerää voimat ja ole viimeinen pystyssä. Ennen sudden deathia synnyt aina uudestaan!";
   $('startBtn').textContent='START';
+  $('onlinePanel').style.display='none';
   overlay.classList.remove('hidden');
   showSaved('p1name','p1saved'); if(numHumans===2) showSaved('p2name','p2saved');
 }
@@ -1094,7 +1307,7 @@ async function startGame(){
   const profiles=[];
   const prof1=await loadOrCreateProfile(p1name);
   profiles.push({firstname:p1name, profile:prof1});
-  if(numHumans===2){
+  if(numHumans===2 || onlineRole==='host'){
     let p2name=(($('p2name').value||'').trim())||'Pelaaja2';
     if(p2name.toLowerCase()===p1name.toLowerCase()) p2name=p2name+' II';
     const prof2=await loadOrCreateProfile(p2name);
@@ -1107,7 +1320,7 @@ async function startGame(){
   gameOver=false; running=true;
   overlay.classList.add('hidden');
 }
-$('startBtn').addEventListener('click',()=>{ startGame(); });
+$('startBtn').addEventListener('click',()=>{ if(onlineRole!=='guest') startGame(); });
 
 function fitStage(){
   const stage=$('stage');
