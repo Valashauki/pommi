@@ -1333,6 +1333,13 @@ function fitStage(){
   const availH=Math.max(240, window.innerHeight-300);
   const width=Math.min(availW, availH*aspect, 1000);
   stage.style.width=width+'px';
+  requestAnimationFrame(()=>{
+    const canvasH = $('game').clientHeight || Math.round(width/aspect);
+    const rc = $('right-col');
+    const lc = $('left-col');
+    if(rc) rc.style.height = canvasH+'px';
+    if(lc) lc.style.height = canvasH+'px';
+  });
 }
 window.addEventListener('resize', fitStage);
 
