@@ -27,7 +27,7 @@
   .sub{font-size:11px;color:var(--ink-4);margin-bottom:8px;letter-spacing:.5px;}
   /* Arena layout */
   #arena{display:flex;gap:6px;align-items:flex-end;justify-content:center;flex-wrap:nowrap;width:100%;max-width:820px;}
-  #left-col{display:flex;flex-direction:column;justify-content:flex-end;flex-shrink:0;padding-bottom:2px;}
+  #left-col{display:flex;flex-direction:column;justify-content:flex-end;align-items:center;flex-shrink:0;padding-bottom:2px;}
   #stage{position:relative;border-radius:14px;overflow:hidden;flex:1;min-width:0;
     box-shadow:0 14px 40px rgba(0,0,0,.55),0 0 0 3px rgba(255,255,255,.06);background:transparent;}
   canvas{display:block;width:100%;height:auto;touch-action:none;}
@@ -47,8 +47,8 @@
   .abil-page-btn{width:100%;padding:5px 0;border:none;border-radius:9px;cursor:pointer;
     background:rgba(255,255,255,.08);color:var(--ink-2);font-family:inherit;font-weight:900;font-size:13px;letter-spacing:.5px;flex-shrink:0;}
   .abil-page-btn:active{transform:scale(.95);}
-  /* HUD overlay inside stage */
-  #hud-overlay{position:absolute;top:8px;left:0;z-index:5;width:138px;
+  /* HUD panel in the left control column */
+  #hud-overlay{position:relative;z-index:5;width:clamp(138px,24vw,196px);max-width:100%;margin-bottom:auto;
     padding:5px 7px;border-radius:10px;background:rgba(6,9,18,.84);border:1px solid rgba(255,255,255,.1);
     pointer-events:none;display:none;}
   .hud-title{font-size:9px;font-weight:900;letter-spacing:1px;text-transform:uppercase;color:var(--ink-4);text-align:center;margin-bottom:3px;}
@@ -133,6 +133,10 @@
 
   <div id="arena">
     <div id="left-col">
+      <div id="hud-overlay">
+        <div class="hud-title">Pisteet</div>
+        <div id="hudList"></div>
+      </div>
       <div id="dpad">
         <div class="pad blank"></div>
         <div class="pad" data-dir="up">▲</div>
@@ -147,10 +151,6 @@
     </div>
     <div id="stage">
       <canvas id="game" width="520" height="440"></canvas>
-      <div id="hud-overlay">
-        <div class="hud-title">Pisteet</div>
-        <div id="hudList"></div>
-      </div>
       <div id="overlay">
 
         <!-- Vaihe 1: Pelinimi -->
