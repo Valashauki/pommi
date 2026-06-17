@@ -271,7 +271,7 @@ window.storage = {
 // ---------- Online state ----------
 let onlineRole = null; // 'host' | 'guest' | null
 let onlinePlayerIdx = 0;
-const NET_INPUT_MS = 25;
+const NET_INPUT_MS = 16;
 const NET_STATE_MS = 33;
 let netLastInputSend = 0;
 let netLastStateSend = 0;
@@ -418,15 +418,29 @@ function buildNetState(){
 
 function applyNetState(s){
   if(!s||!s.players) return;
+  const predictedGuest = onlineRole==='guest' && players ? players[onlinePlayerIdx] : null;
   COLS=s.COLS; ROWS=s.ROWS; W=COLS*TILE; H=ROWS*TILE;
   if(canvas.width!==W||canvas.height!==H){canvas.width=W;canvas.height=H;}
   grid=s.grid.map(r=>[...r]);
   players=s.players.map(p=>({
     ...p,
+    authPx:p.px,
+    authPy:p.py,
     profile: p.totalScore!=null ? {totalScore:p.totalScore, prefix:'', abilities:p.abilities||{}} : null,
     targetCell:null
   }));
-  human=players[0];
+  if(predictedGuest && players[onlinePlayerIdx] && players[onlinePlayerIdx].alive && predictedGuest.alive){
+    const p=players[onlinePlayerIdx];
+    const dx=p.authPx-predictedGuest.px, dy=p.authPy-predictedGuest.py;
+    const drift=Math.hypot(dx,dy);
+    if(drift<TILE*1.25){
+      p.px=predictedGuest.px;
+      p.py=predictedGuest.py;
+      p.dir=predictedGuest.dir;
+      p.moving=predictedGuest.moving;
+      p.anim=predictedGuest.anim;
+    }
+  }
   bombs=s.bombs.map(b=>({
     ...b, done:false,
     owner:b.oi>=0&&players[b.oi]?players[b.oi]:null,
@@ -1028,6 +1042,17 @@ function updateGuestPrediction(dt){
     p.anim+=dt;
   } else {
     p.moving=false;
+  }
+  if(p.authPx!=null && p.authPy!=null){
+    const dx=p.authPx-p.px, dy=p.authPy-p.py;
+    const drift=Math.hypot(dx,dy);
+    if(drift>TILE*1.25){
+      p.px=p.authPx;
+      p.py=p.authPy;
+    } else if(!dir && drift>0.5){
+      p.px+=dx*0.18;
+      p.py+=dy*0.18;
+    }
   }
   human=p;
 }
