@@ -271,7 +271,10 @@ window.storage = {
 // ---------- Online state ----------
 let onlineRole = null; // 'host' | 'guest' | null
 let onlinePlayerIdx = 0;
-let netLastSend = 0;
+const NET_INPUT_MS = 25;
+const NET_STATE_MS = 33;
+let netLastInputSend = 0;
+let netLastStateSend = 0;
 let pendingGuestAbilities = [];
 
 const socket = io();
@@ -281,6 +284,8 @@ socket.on('guest-joined', () => {
   setTimeout(() => {
     onlineRole = 'host';
     onlinePlayerIdx = 0;
+    netLastInputSend = 0;
+    netLastStateSend = 0;
     numHumans = 1; // host controls P1 locally; P2 comes from network
     startGame();
   }, 800);
@@ -432,6 +437,7 @@ function applyNetState(s){
   sudden=s.sudden; suddenBanner=s.suddenBanner; shake=s.shake;
   lights=s.lights.filter(L=>L.oi>=0&&players[L.oi]).map(L=>({owner:players[L.oi],t:L.t}));
   rockFx=[...s.rockFx];
+  human=players[onlinePlayerIdx] || players[0];
   if(s.gameOver&&!gameOver){
     gameOver=true; running=false;
     const winner=players.reduce((a,b)=>roundScore(b)>roundScore(a)?b:a, players[0]);
@@ -1008,6 +1014,23 @@ function update(dt){
   if(standing.length<=1) endGame(standing.length?standing[0]:null);
   if(shake>0.1) shake*=0.86; else shake=0;
 }
+
+function updateGuestPrediction(dt){
+  if(!players || gameOver) return;
+  const p=players[onlinePlayerIdx];
+  if(!p || !p.alive) return;
+  const dirs=humanDirs[0], dir=dirs[dirs.length-1];
+  if(dir){
+    p.dir=dir;
+    const mult=p.speedTimer>0?SPEEDBOOST_MULT:1;
+    moveDir(p, dir, p.speed*mult*TILE*dt);
+    p.moving=true;
+    p.anim+=dt;
+  } else {
+    p.moving=false;
+  }
+  human=p;
+}
 function roundScore(p){ return p.kills - p.deaths; }
 function endGame(winner){
   gameOver=true; running=false;
@@ -1310,7 +1333,7 @@ function frame(t){
 
   if(onlineRole==='guest'){
     // Guest: send inputs, render received state
-    if(t - netLastSend > 50){
+    if(t - netLastInputSend > NET_INPUT_MS){
       socket.emit('net-input', {
         dirs: [...humanDirs[0]],
         bomb: req.bomb[0],
@@ -1318,16 +1341,17 @@ function frame(t){
       });
       req.bomb[0]=false;
       pendingGuestAbilities=[];
-      netLastSend=t;
+      netLastInputSend=t;
     }
+    updateGuestPrediction(dt);
     if(players){ draw(); renderHud(); updateAbilityUI(); }
   } else {
     if(running && !gameOver) update(dt);
     draw(); renderHud(); updateAbilityUI();
-    // Host: broadcast state every 50ms
-    if(onlineRole==='host' && running && t - netLastSend > 50){
-      socket.emit('net-state', buildNetState());
-      netLastSend=t;
+    // Host: broadcast state often; stale snapshots can be dropped.
+    if(onlineRole==='host' && running && t - netLastStateSend > NET_STATE_MS){
+      socket.volatile.emit('net-state', buildNetState());
+      netLastStateSend=t;
     }
   }
   requestAnimationFrame(frame);
@@ -1424,6 +1448,8 @@ $('joinConfirmBtn').addEventListener('click',()=>{
   socket.emit('join-room',{code},({ok,error})=>{
     if(error){ $('onlineMsg').textContent='❌ '+error; return; }
     onlineRole='guest'; onlinePlayerIdx=1;
+    netLastInputSend = 0;
+    netLastStateSend = 0;
     $('onlineMsg').textContent='✅ Liitytty! Odotetaan isäntää...';
     $('joinInput').style.display='none';
     $('joinConfirmBtn').style.display='none';
@@ -1454,6 +1480,8 @@ async function startGame(){
   buildAbilityPanels();
   humanDirs[0].length=0; humanDirs[1].length=0;
   for(const kk in req){ req[kk][0]=false; req[kk][1]=false; }
+  netLastInputSend = 0;
+  netLastStateSend = 0;
   gameOver=false; running=true;
   overlay.classList.add('hidden');
   const ho=$('hud-overlay'); if(ho) ho.style.display='block';
