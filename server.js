@@ -5,8 +5,8 @@ const crypto = require('crypto');
 const { createGame } = require('./gameengine');
 
 const ROOT = __dirname;
-const SERVER_TICK_MS = 1000 / 30;
-const SNAPSHOT_MS = 33;
+const SERVER_TICK_MS = 1000 / 60;
+const SNAPSHOT_MS = 16;
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
 const CONTENT_TYPES = {

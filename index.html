@@ -294,15 +294,11 @@ window.storage = {
 let onlineRole = null; // 'host' | 'guest' | null
 let onlinePlayerIdx = 0;
 const NET_INPUT_MS = 16;
-const NET_STATE_MS = 33;
 const PING_INTERVAL_MS = 2000;
 let netLastInputSend = 0;
 let netLastStateSend = 0;
 let netLastPingSend = 0;
 let pendingOnlineAbilities = [];
-// Remote-entity interpolation: time of last snapshot + measured gap between snapshots
-let netSnapTime = 0;
-let netSnapInterval = NET_STATE_MS;
 // Measured round-trip time in ms (exponentially smoothed)
 let measuredRtt = 80;
 
@@ -454,24 +450,16 @@ function buildNetState(){
 function applyNetState(s){
   if(!s||!s.players) return;
   const predictedLocal = onlineRole && players ? players[onlinePlayerIdx] : null;
-  // Remember each entity's last authoritative position so we can interpolate
-  // remote players smoothly between the two most recent snapshots.
-  const prevById={};
-  if(players) for(const op of players) prevById[op.id]={px:op.px, authPx:op.authPx, authPy:op.authPy};
-  const nowT=performance.now();
-  if(netSnapTime) netSnapInterval=Math.max(8,Math.min(200,nowT-netSnapTime));
-  netSnapTime=nowT;
   COLS=s.COLS; ROWS=s.ROWS; W=COLS*TILE; H=ROWS*TILE;
   if(canvas.width!==W||canvas.height!==H){canvas.width=W;canvas.height=H;}
   grid=s.grid.map(r=>[...r]);
+  // Remote entities render directly at the authoritative position (no
+  // interpolation) for minimum latency; the local player keeps prediction.
   players=s.players.map(p=>{
-    const prev=prevById[p.id];
     return {
       ...p,
       authPx:p.px,
       authPy:p.py,
-      prevPx: prev ? (prev.authPx!=null?prev.authPx:prev.px) : p.px,
-      prevPy: prev ? (prev.authPy!=null?prev.authPy:prev.py) : p.py,
       profile: p.totalScore!=null ? {totalScore:p.totalScore, prefix:'', abilities:p.abilities||{}} : null,
       targetCell:null
     };
@@ -1086,18 +1074,6 @@ function update(dt){
   if(shake>0.1) shake*=0.86; else shake=0;
 }
 
-function interpolateRemotes(){
-  if(!players) return;
-  const a=Math.max(0,Math.min(1,(performance.now()-netSnapTime)/netSnapInterval));
-  for(const p of players){
-    if(onlineRole && p.id===onlinePlayerIdx) continue; // local player uses prediction
-    if(p.prevPx==null) continue;
-    const dx=p.authPx-p.prevPx, dy=p.authPy-p.prevPy;
-    if(dx*dx+dy*dy > (TILE*2)*(TILE*2)){ p.px=p.authPx; p.py=p.authPy; continue; } // respawn/teleport: snap
-    p.px=p.prevPx+dx*a;
-    p.py=p.prevPy+dy*a;
-  }
-}
 function updateGuestPrediction(dt){
   if(!players || gameOver) return;
   const p=players[onlinePlayerIdx];
@@ -1466,7 +1442,6 @@ function frame(t){
       netLastPingSend=t;
     }
     updateGuestPrediction(dt);
-    interpolateRemotes();
     if(players){ draw(); renderHud(); updateAbilityUI(); }
   } else {
     if(running && !gameOver) update(dt);
