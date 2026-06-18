@@ -183,30 +183,7 @@
         <!-- Vaihe 3a: Harjoittelun asetukset -->
         <div class="ov-step" id="ov-practice">
           <div class="step-head">🤖 Harjoittelu</div>
-          <div style="display:flex;flex-direction:column;gap:7px;align-items:center">
-            <span class="glabel">Kartan koko</span>
-            <div class="row" id="mapRow">
-              <button class="opt sel" data-map="small">Pieni</button>
-              <button class="opt" data-map="medium">Keskikoko</button>
-              <button class="opt" data-map="large">Suuri</button>
-            </div>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:7px;align-items:center">
-            <span class="glabel">Bottien määrä</span>
-            <div class="row">
-              <button class="opt" id="botMinus" style="font-size:18px;min-width:42px;">−</button>
-              <span id="botCount" style="min-width:36px;text-align:center;font-size:19px;font-weight:900;">2</span>
-              <button class="opt" id="botPlus" style="font-size:18px;min-width:42px;">+</button>
-            </div>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:7px;align-items:center">
-            <span class="glabel">Vaikeusaste</span>
-            <div class="row" id="diffRow">
-              <button class="opt" data-diff="easy">Helppo</button>
-              <button class="opt sel" data-diff="normal">Normaali</button>
-              <button class="opt" data-diff="hard">Vaikea</button>
-            </div>
-          </div>
+          <div id="practiceSettings" style="display:flex;flex-direction:column;gap:7px;align-items:center"></div>
           <button class="btn-primary" id="startBtn">ALOITA PELI</button>
           <button class="back-link" id="practiceBackBtn">‹ Takaisin</button>
         </div>
@@ -220,6 +197,7 @@
           </div>
           <div id="onlinePanel" style="display:none">
             <div id="roomCodeBig" style="display:none"></div>
+            <div id="onlineSettings" style="display:none;flex-direction:column;gap:7px;align-items:center;margin:2px 0"></div>
             <input id="joinInput" class="nameinput" placeholder="KOODI" maxlength="4" style="display:none">
             <button class="opt" id="joinConfirmBtn" style="display:none">Liity peliin</button>
             <div id="onlineMsg"></div>
@@ -245,6 +223,8 @@
               <div class="glabel">Pisteet</div>
               <div class="end-scores" id="endHudList"></div>
               <button class="btn-primary" id="playAgainBtn" style="margin-top:6px">PELAA UUDESTAAN</button>
+              <button class="opt" id="editRoomBtn" style="display:none">⚙️ Muokkaa huoneen asetuksia</button>
+              <div id="endWaitMsg" style="display:none;font-size:11px;color:#8ea0c8"></div>
               <button class="back-link" id="endMenuBtn">‹ Päävalikkoon</button>
             </div>
           </div>
@@ -1209,6 +1189,13 @@ function endGame(winner){
       scoreList.appendChild(div);
     }
   }
+  // End-screen actions depend on role: guest can't start a new game, only
+  // the host gets the "edit room settings" shortcut.
+  const isHost=onlineRole==='host', isGuest=onlineRole==='guest';
+  $('playAgainBtn').style.display=isGuest?'none':'block';
+  $('editRoomBtn').style.display=isHost?'block':'none';
+  $('endWaitMsg').style.display=isGuest?'block':'none';
+  if(isGuest) $('endWaitMsg').textContent='Odota — isäntä voi aloittaa uuden pelin.';
   showStep('end');
   overlay.classList.remove('hidden');
 }
@@ -1490,20 +1477,48 @@ function frame(t){
 
 // ---------- Menu ----------
 const $=(id)=>document.getElementById(id);
-const botCountEl=$('botCount');
-function setBots(n){ const max=PALETTE.length-1; numBots=Math.max(1,Math.min(max,n)); botCountEl.textContent=numBots; }
-$('botMinus').addEventListener('click',()=>setBots(numBots-1));
-$('botPlus').addEventListener('click',()=>setBots(numBots+1));
-$('mapRow').addEventListener('click',e=>{
-  const b=e.target.closest('[data-map]'); if(!b) return;
-  document.querySelectorAll('#mapRow .opt').forEach(o=>o.classList.remove('sel'));
-  b.classList.add('sel'); mapSize=b.dataset.map;
-});
-$('diffRow').addEventListener('click',e=>{
-  const b=e.target.closest('[data-diff]'); if(!b) return;
-  document.querySelectorAll('#diffRow .opt').forEach(o=>o.classList.remove('sel'));
-  b.classList.add('sel'); difficulty=b.dataset.diff;
-});
+// Reusable settings panel (map size / bot count / difficulty). Reads and
+// writes the shared globals, so practice and online stay in sync. Rebuild it
+// whenever a panel is shown to reflect the current values.
+function buildSettingsPanel(container, maxBots){
+  maxBots = maxBots || (PALETTE.length-1);
+  numBots = Math.max(1, Math.min(maxBots, numBots));
+  container.innerHTML=
+    '<div style="display:flex;flex-direction:column;gap:6px;align-items:center">'
+    +'<span class="glabel">Kartan koko</span>'
+    +'<div class="row" data-row="map">'
+    +'<button class="opt" data-map="small">Pieni</button>'
+    +'<button class="opt" data-map="medium">Keskikoko</button>'
+    +'<button class="opt" data-map="large">Suuri</button>'
+    +'</div></div>'
+    +'<div style="display:flex;flex-direction:column;gap:6px;align-items:center">'
+    +'<span class="glabel">Bottien määrä</span>'
+    +'<div class="row">'
+    +'<button class="opt" data-bot="minus" style="font-size:18px;min-width:42px;">−</button>'
+    +'<span data-bot="count" style="min-width:36px;text-align:center;font-size:19px;font-weight:900;"></span>'
+    +'<button class="opt" data-bot="plus" style="font-size:18px;min-width:42px;">+</button>'
+    +'</div></div>'
+    +'<div style="display:flex;flex-direction:column;gap:6px;align-items:center">'
+    +'<span class="glabel">Vaikeusaste</span>'
+    +'<div class="row" data-row="diff">'
+    +'<button class="opt" data-diff="easy">Helppo</button>'
+    +'<button class="opt" data-diff="normal">Normaali</button>'
+    +'<button class="opt" data-diff="hard">Vaikea</button>'
+    +'</div></div>';
+  const mapRow=container.querySelector('[data-row="map"]');
+  const diffRow=container.querySelector('[data-row="diff"]');
+  const countEl=container.querySelector('[data-bot="count"]');
+  function sync(){
+    mapRow.querySelectorAll('.opt').forEach(o=>o.classList.toggle('sel',o.dataset.map===mapSize));
+    diffRow.querySelectorAll('.opt').forEach(o=>o.classList.toggle('sel',o.dataset.diff===difficulty));
+    countEl.textContent=numBots;
+  }
+  mapRow.addEventListener('click',e=>{const b=e.target.closest('[data-map]'); if(!b)return; mapSize=b.dataset.map; sync();});
+  diffRow.addEventListener('click',e=>{const b=e.target.closest('[data-diff]'); if(!b)return; difficulty=b.dataset.diff; sync();});
+  container.querySelector('[data-bot="minus"]').addEventListener('click',()=>{numBots=Math.max(1,numBots-1); sync();});
+  container.querySelector('[data-bot="plus"]').addEventListener('click',()=>{numBots=Math.min(maxBots,numBots+1); sync();});
+  sync();
+}
 async function showSaved(inputId,noteId){
   const name=($(inputId).value||'').trim();
   const note=$(noteId);
@@ -1528,21 +1543,42 @@ $('nameNextBtn').addEventListener('click',()=>{
 });
 $('p1name').addEventListener('keydown',e=>{ if(e.key==='Enter') $('nameNextBtn').click(); });
 $('modeOnlineBtn').addEventListener('click',()=>showStep('online'));
-$('modePracticeBtn').addEventListener('click',()=>showStep('practice'));
+$('modePracticeBtn').addEventListener('click',()=>{ buildSettingsPanel($('practiceSettings')); showStep('practice'); });
 $('modeBackBtn').addEventListener('click',()=>showStep('name'));
 $('practiceBackBtn').addEventListener('click',()=>showStep('mode'));
 $('onlineBackBtn').addEventListener('click',()=>{
   onlineRole=null; onlinePlayerIdx=0;
   $('onlinePanel').style.display='none';
+  $('onlineSettings').style.display='none';
   $('onlineStartBtn').style.display='none';
   showStep('mode');
 });
 $('playAgainBtn').addEventListener('click',()=>{
-  showStep('name');
-  overlay.classList.remove('hidden');
+  // Start a new game straight from the button with the current settings.
+  // Guest can't start (button is hidden for them in endGame).
+  if(onlineRole==='guest') return;
+  startGame();
+});
+$('editRoomBtn').addEventListener('click',()=>{
+  // Host only: open the room lobby to tweak settings before restarting.
   const ho=$('hud-overlay'); if(ho) ho.style.display='none';
+  overlay.classList.remove('hidden');
+  running=false; // keep gameOver=true so trailing snapshots don't reopen the end screen
+  showStep('online');
+  $('onlinePanel').style.display='flex';
+  $('joinInput').style.display='none';
+  $('joinConfirmBtn').style.display='none';
+  $('roomCodeBig').style.display='block';
+  buildSettingsPanel($('onlineSettings'), PALETTE.length-2);
+  $('onlineSettings').style.display='flex';
+  $('onlineStartBtn').style.display='block';
+  $('onlineMsg').textContent='Muokkaa asetuksia ja aloita uusi peli.';
 });
 $('endMenuBtn').addEventListener('click',()=>{
+  onlineRole=null; onlinePlayerIdx=0;
+  $('onlinePanel').style.display='none';
+  $('onlineSettings').style.display='none';
+  $('onlineStartBtn').style.display='none';
   showStep('name');
   overlay.classList.remove('hidden');
   const ho=$('hud-overlay'); if(ho) ho.style.display='none';
@@ -1554,6 +1590,7 @@ $('createRoomBtn').addEventListener('click',()=>{
   $('joinInput').style.display='none';
   $('joinConfirmBtn').style.display='none';
   $('roomCodeBig').style.display='none';
+  $('onlineSettings').style.display='none';
   $('onlineStartBtn').style.display='none';
   $('onlineMsg').textContent='Luodaan huonetta...';
   const name=(($('p1name').value||'').trim())||'Pelaaja';
@@ -1563,13 +1600,16 @@ $('createRoomBtn').addEventListener('click',()=>{
     netLastStateSend = 0;
     $('roomCodeBig').textContent=code;
     $('roomCodeBig').style.display='block';
-    $('onlineMsg').textContent='Jaa tämä koodi kaverillesi!';
+    buildSettingsPanel($('onlineSettings'), PALETTE.length-2);
+    $('onlineSettings').style.display='flex';
+    $('onlineMsg').textContent='Jaa tämä koodi kaverillesi! Voit säätää asetuksia alta.';
     $('onlineStartBtn').style.display='none';
   });
 });
 $('joinRoomBtn').addEventListener('click',()=>{
   $('onlinePanel').style.display='flex';
   $('roomCodeBig').style.display='none';
+  $('onlineSettings').style.display='none';
   $('joinInput').style.display='block';
   $('joinInput').value='';
   $('joinConfirmBtn').style.display='block';
