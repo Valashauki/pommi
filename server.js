@@ -251,6 +251,10 @@ server.on('upgrade', (req, socket) => {
     return;
   }
 
+  // Disable Nagle's algorithm: send small input/snapshot frames immediately
+  // instead of buffering them for up to ~40ms.
+  socket.setNoDelay(true);
+
   const key = req.headers['sec-websocket-key'];
   if (!key) {
     socket.destroy();
