@@ -1131,9 +1131,7 @@ function updateGuestPrediction(dt){
       p.px=p.authPx;
       p.py=p.authPy;
     } else if(drift>0.3){
-      // Smoothly ease toward the server position instead of jolting.
-      // Gentler while actively moving so prediction stays responsive.
-      const k=dir?0.12:0.25;
+      const k=dir?0.35:0.5;
       p.px+=dx*k;
       p.py+=dy*k;
     }
