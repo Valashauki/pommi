@@ -2,7 +2,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { createGame } = require('./game-engine');
+const { createGame } = require('./gameengine');
 
 const ROOT = __dirname;
 const SERVER_TICK_MS = 1000 / 30;
