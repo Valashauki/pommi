@@ -504,6 +504,14 @@ function applyNetState(s){
     owner:b.oi>=0&&players[b.oi]?players[b.oi]:null,
     pass:new Set(b.pass||[]), countsToLimit:false
   }));
+  // Locally allow any player currently standing on a bomb to walk off it.
+  // The server's pass set lags behind the predicted local position, so without
+  // this the local player gets blocked by their own freshly planted bomb.
+  for(const b of bombs){
+    for(const p of players){
+      if(p.alive && overlapTile(p,b.gx,b.gy)) b.pass.add(p.id);
+    }
+  }
   flames=s.flames.map(f=>({...f, owner:null}));
   powerups={...s.powerups};
   sudden=s.sudden; suddenBanner=s.suddenBanner; shake=s.shake;
