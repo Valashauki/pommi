@@ -260,7 +260,49 @@
 
   <div class="hint">WASD liiku · Väli pommi · kyvyt 1–8 · R = uusi peli — voitosta saat satunnaisen kyvyn</div>
 
-<script src="/socket.io/socket.io.js"></script>
+<script>
+function io(){
+  const handlers={};
+  const pending={};
+  const queue=[];
+  let seq=1;
+  const proto=location.protocol==='https:'?'wss':'ws';
+  const ws=new WebSocket(proto+'://'+location.host);
+  function send(packet){
+    const text=JSON.stringify(packet);
+    if(ws.readyState===WebSocket.OPEN) ws.send(text);
+    else queue.push(text);
+  }
+  ws.addEventListener('open',()=>{
+    while(queue.length) ws.send(queue.shift());
+  });
+  ws.addEventListener('message',event=>{
+    let msg;
+    try{ msg=JSON.parse(event.data); }catch(e){ return; }
+    if(msg.ack!=null){
+      const cb=pending[msg.ack];
+      if(cb){ delete pending[msg.ack]; cb(msg.data||{}); }
+      return;
+    }
+    const fn=handlers[msg.type];
+    if(fn) fn(msg.data);
+  });
+  ws.addEventListener('close',()=>{
+    const fn=handlers['disconnect'];
+    if(fn) fn();
+  });
+  return {
+    on(type,fn){ handlers[type]=fn; },
+    emit(type,data,cb){
+      if(typeof data==='function'){ cb=data; data={}; }
+      const packet={type,data:data||{}};
+      if(cb){ packet.ack=seq++; pending[packet.ack]=cb; }
+      send(packet);
+    },
+    volatile:{ emit(type,data){ send({type,data:data||{}}); } }
+  };
+}
+</script>
 <script>
 // localStorage polyfill for window.storage API
 window.storage = {
@@ -275,32 +317,33 @@ const NET_INPUT_MS = 16;
 const NET_STATE_MS = 33;
 let netLastInputSend = 0;
 let netLastStateSend = 0;
-let pendingGuestAbilities = [];
+let pendingOnlineAbilities = [];
 
 const socket = io();
 
-socket.on('guest-joined', () => {
-  $('onlineMsg').textContent = '✅ Kaveri liittyi! Peli alkaa...';
-  setTimeout(() => {
-    onlineRole = 'host';
-    onlinePlayerIdx = 0;
-    netLastInputSend = 0;
-    netLastStateSend = 0;
-    numHumans = 1; // host controls P1 locally; P2 comes from network
-    startGame();
-  }, 800);
+socket.on('guest-joined', ({name}={}) => {
+  $('onlineMsg').textContent = `Kaveri liittyi${name?' ('+name+')':''}. Voit aloittaa pelin.`;
+  $('onlineStartBtn').style.display='block';
+});
+
+socket.on('online-started', ({playerIndex,state}) => {
+  onlinePlayerIdx = playerIndex;
+  netLastInputSend = 0;
+  netLastStateSend = 0;
+  pendingOnlineAbilities = [];
+  humanDirs[0].length=0; humanDirs[1].length=0;
+  for(const kk in req){ req[kk][0]=false; req[kk][1]=false; }
+  applyNetState(state);
+  running = true;
+  gameOver = false;
+  overlay.classList.add('hidden');
+  buildAbilityPanels();
+  const ho=document.getElementById('hud-overlay'); if(ho) ho.style.display='block';
 });
 
 socket.on('net-state', state => {
-  if (onlineRole !== 'guest') return;
+  if (!onlineRole) return;
   applyNetState(state);
-});
-
-socket.on('net-input', ({ dirs, bomb, abilities }) => {
-  if (onlineRole !== 'host') return;
-  humanDirs[1] = dirs || [];
-  if (bomb) req.bomb[1] = true;
-  if (abilities) for (const ab of abilities) if (req[ab]) req[ab][1] = true;
 });
 
 socket.on('player-left', () => {
@@ -418,7 +461,7 @@ function buildNetState(){
 
 function applyNetState(s){
   if(!s||!s.players) return;
-  const predictedGuest = onlineRole==='guest' && players ? players[onlinePlayerIdx] : null;
+  const predictedLocal = onlineRole && players ? players[onlinePlayerIdx] : null;
   COLS=s.COLS; ROWS=s.ROWS; W=COLS*TILE; H=ROWS*TILE;
   if(canvas.width!==W||canvas.height!==H){canvas.width=W;canvas.height=H;}
   grid=s.grid.map(r=>[...r]);
@@ -429,16 +472,16 @@ function applyNetState(s){
     profile: p.totalScore!=null ? {totalScore:p.totalScore, prefix:'', abilities:p.abilities||{}} : null,
     targetCell:null
   }));
-  if(predictedGuest && players[onlinePlayerIdx] && players[onlinePlayerIdx].alive && predictedGuest.alive){
+  if(predictedLocal && players[onlinePlayerIdx] && players[onlinePlayerIdx].alive && predictedLocal.alive){
     const p=players[onlinePlayerIdx];
-    const dx=p.authPx-predictedGuest.px, dy=p.authPy-predictedGuest.py;
+    const dx=p.authPx-predictedLocal.px, dy=p.authPy-predictedLocal.py;
     const drift=Math.hypot(dx,dy);
     if(drift<TILE*1.25){
-      p.px=predictedGuest.px;
-      p.py=predictedGuest.py;
-      p.dir=predictedGuest.dir;
-      p.moving=predictedGuest.moving;
-      p.anim=predictedGuest.anim;
+      p.px=predictedLocal.px;
+      p.py=predictedLocal.py;
+      p.dir=predictedLocal.dir;
+      p.moving=predictedLocal.moving;
+      p.anim=predictedLocal.anim;
     }
   }
   bombs=s.bombs.map(b=>({
@@ -893,10 +936,10 @@ window.addEventListener('keydown',e=>{
   if(typingInName()) return;
   const k=e.key, lk=(k||'').toLowerCase();
 
-  if(onlineRole==='guest'){
+  if(onlineRole){
     if(k===' '||e.code==='Space'){ e.preventDefault(); req.bomb[0]=true; return; }
     if(WASD[lk]!==undefined){ e.preventDefault(); setDir(0,WASD[lk],true); return; }
-    if(P1NUM[k]){ pendingGuestAbilities.push(P1NUM[k]); return; }
+    if(P1NUM[k]){ pendingOnlineAbilities.push(P1NUM[k]); return; }
     if(lk==='r'&&gameOver){ showOverlay(); return; }
     return;
   }
@@ -1329,7 +1372,7 @@ function buildAbilityPanels(){
   cont.querySelectorAll('.abilrow').forEach(el=>{
     el.addEventListener('pointerdown',e=>{e.preventDefault();
       const pi=+el.dataset.pi, ab=el.dataset.ab;
-      if(onlineRole==='guest'){ pendingGuestAbilities.push(ab); return; }
+      if(onlineRole){ pendingOnlineAbilities.push(ab); return; }
       if(req[ab]) req[ab][pi]=true;
     });
   });
@@ -1356,16 +1399,16 @@ function updateAbilityUI(){
 function frame(t){
   const dt=Math.min(0.04,(t-last)/1000||0); last=t;
 
-  if(onlineRole==='guest'){
-    // Guest: send inputs, render received state
+  if(onlineRole){
+    // Online clients send input only; the server owns the game state.
     if(t - netLastInputSend > NET_INPUT_MS){
-      socket.emit('net-input', {
+      socket.emit('client-input', {
         dirs: [...humanDirs[0]],
         bomb: req.bomb[0],
-        abilities: [...pendingGuestAbilities]
+        abilities: [...pendingOnlineAbilities]
       });
       req.bomb[0]=false;
-      pendingGuestAbilities=[];
+      pendingOnlineAbilities=[];
       netLastInputSend=t;
     }
     updateGuestPrediction(dt);
@@ -1373,11 +1416,6 @@ function frame(t){
   } else {
     if(running && !gameOver) update(dt);
     draw(); renderHud(); updateAbilityUI();
-    // Host: broadcast state often; stale snapshots can be dropped.
-    if(onlineRole==='host' && running && t - netLastStateSend > NET_STATE_MS){
-      socket.volatile.emit('net-state', buildNetState());
-      netLastStateSend=t;
-    }
   }
   requestAnimationFrame(frame);
 }
@@ -1450,11 +1488,15 @@ $('createRoomBtn').addEventListener('click',()=>{
   $('roomCodeBig').style.display='none';
   $('onlineStartBtn').style.display='none';
   $('onlineMsg').textContent='Luodaan huonetta...';
-  socket.emit('create-room',({code})=>{
+  const name=(($('p1name').value||'').trim())||'Pelaaja';
+  socket.emit('create-room',{name},({code})=>{
+    onlineRole='host'; onlinePlayerIdx=0;
+    netLastInputSend = 0;
+    netLastStateSend = 0;
     $('roomCodeBig').textContent=code;
     $('roomCodeBig').style.display='block';
     $('onlineMsg').textContent='Jaa tämä koodi kaverillesi!';
-    $('onlineStartBtn').style.display='block';
+    $('onlineStartBtn').style.display='none';
   });
 });
 $('joinRoomBtn').addEventListener('click',()=>{
@@ -1470,7 +1512,8 @@ $('joinConfirmBtn').addEventListener('click',()=>{
   const code=($('joinInput').value||'').trim().toUpperCase();
   if(code.length<4){ $('onlineMsg').textContent='Koodi on 4 merkkiä'; return; }
   $('onlineMsg').textContent='Liitytään...';
-  socket.emit('join-room',{code},({ok,error})=>{
+  const name=(($('p1name').value||'').trim())||'Kaveri';
+  socket.emit('join-room',{code,name},({ok,error})=>{
     if(error){ $('onlineMsg').textContent='❌ '+error; return; }
     onlineRole='guest'; onlinePlayerIdx=1;
     netLastInputSend = 0;
@@ -1494,13 +1537,16 @@ function showOverlay(){
 
 async function startGame(){
   const p1name=(($('p1name').value||'').trim())||'Pelaaja';
+  if(onlineRole==='host'){
+    $('onlineMsg').textContent='Käynnistetään peliä palvelimella...';
+    socket.emit('start-online-game',{settings:{mapSize,difficulty,numBots}},({ok,error}={})=>{
+      if(error) $('onlineMsg').textContent='❌ '+error;
+    });
+    return;
+  }
   const profiles=[];
   const prof1=await loadOrCreateProfile(p1name);
   profiles.push({firstname:p1name,profile:prof1});
-  if(onlineRole==='host'){
-    const prof2=await loadOrCreateProfile('Kaveri');
-    profiles.push({firstname:'Kaveri',profile:prof2});
-  }
   buildBoard(profiles);
   buildAbilityPanels();
   humanDirs[0].length=0; humanDirs[1].length=0;
