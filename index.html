@@ -315,14 +315,23 @@ let onlineRole = null; // 'host' | 'guest' | null
 let onlinePlayerIdx = 0;
 const NET_INPUT_MS = 16;
 const NET_STATE_MS = 33;
+const PING_INTERVAL_MS = 2000;
 let netLastInputSend = 0;
 let netLastStateSend = 0;
+let netLastPingSend = 0;
 let pendingOnlineAbilities = [];
 // Remote-entity interpolation: time of last snapshot + measured gap between snapshots
 let netSnapTime = 0;
 let netSnapInterval = NET_STATE_MS;
+// Measured round-trip time in ms (exponentially smoothed)
+let measuredRtt = 80;
 
 const socket = io();
+
+socket.on('pong', ({t}) => {
+  const rtt = performance.now() - t;
+  measuredRtt = measuredRtt * 0.8 + rtt * 0.2;
+});
 
 socket.on('guest-joined', ({name}={}) => {
   $('onlineMsg').textContent = `Kaveri liittyi${name?' ('+name+')':''}. Voit aloittaa pelin.`;
@@ -1124,10 +1133,17 @@ function updateGuestPrediction(dt){
     p.moving=false;
   }
   if(p.authPx!=null && p.authPy!=null){
-    const dx=p.authPx-p.px, dy=p.authPy-p.py;
+    // The auth position is RTT/2 ms stale — project it forward along the
+    // current input direction so reconciliation targets where the server
+    // will agree we are, not where it last saw us.
+    const lagSec = Math.min(0.15, (measuredRtt / 2) / 1000);
+    const [vx,vy] = dir ? DIR_VEC[dir] : [0,0];
+    const spd = p.speed * (p.speedTimer>0?SPEEDBOOST_MULT:1) * TILE;
+    const projX = p.authPx + vx*spd*lagSec;
+    const projY = p.authPy + vy*spd*lagSec;
+    const dx=projX-p.px, dy=projY-p.py;
     const drift=Math.hypot(dx,dy);
     if(drift>TILE*3){
-      // Large desync (respawn / teleport): snap.
       p.px=p.authPx;
       p.py=p.authPy;
     } else if(drift>0.3){
@@ -1389,6 +1405,14 @@ function renderHud(){
       <span class="kills" style="color:${col};font-size:${ss}px">${rs>=0?'+':''}${rs}</span>`;
     hudList.appendChild(card);
   }
+  if(onlineRole){
+    const ping=Math.round(measuredRtt);
+    const col=ping<60?'#3ddc97':ping<120?'#ffd23d':'#ff6b3d';
+    const pd=document.createElement('div');
+    pd.style.cssText='font-size:9px;color:'+col+';text-align:right;padding:1px 4px 0;opacity:.75;';
+    pd.textContent=ping+' ms';
+    hudList.appendChild(pd);
+  }
 }
 function buildAbilityPanels(){
   const cont=document.getElementById('abilPanels'); cont.innerHTML='';
@@ -1449,6 +1473,10 @@ function frame(t){
       req.bomb[0]=false;
       pendingOnlineAbilities=[];
       netLastInputSend=t;
+    }
+    if(t - netLastPingSend > PING_INTERVAL_MS){
+      socket.emit('ping', {t: performance.now()});
+      netLastPingSend=t;
     }
     updateGuestPrediction(dt);
     interpolateRemotes();

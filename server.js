@@ -180,6 +180,11 @@ function handleMessage(client, raw) {
   const type = msg.type;
   const data = msg.data || {};
 
+  if (type === 'ping') {
+    sendFrame(client.socket, JSON.stringify({ type: 'pong', t: data.t }));
+    return;
+  }
+
   if (type === 'create-room') {
     const code = makeCode();
     const room = {
