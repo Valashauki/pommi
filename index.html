@@ -449,35 +449,18 @@ function buildNetState(){
 
 function applyNetState(s){
   if(!s||!s.players) return;
-  const predictedLocal = onlineRole && players ? players[onlinePlayerIdx] : null;
   COLS=s.COLS; ROWS=s.ROWS; W=COLS*TILE; H=ROWS*TILE;
   if(canvas.width!==W||canvas.height!==H){canvas.width=W;canvas.height=H;}
   grid=s.grid.map(r=>[...r]);
-  // Remote entities render directly at the authoritative position (no
-  // interpolation) for minimum latency; the local player keeps prediction.
+  // Every entity (including the local player) renders directly at the
+  // authoritative server position — no prediction, no interpolation.
   players=s.players.map(p=>{
     return {
       ...p,
-      authPx:p.px,
-      authPy:p.py,
       profile: p.totalScore!=null ? {totalScore:p.totalScore, prefix:'', abilities:p.abilities||{}} : null,
       targetCell:null
     };
   });
-  if(predictedLocal && players[onlinePlayerIdx] && players[onlinePlayerIdx].alive && predictedLocal.alive){
-    const p=players[onlinePlayerIdx];
-    const dx=p.authPx-predictedLocal.px, dy=p.authPy-predictedLocal.py;
-    const drift=Math.hypot(dx,dy);
-    if(drift<TILE*3){
-      // Keep the predicted position; per-frame smoothing eases toward the
-      // authoritative one. Only a huge desync falls through to a snap.
-      p.px=predictedLocal.px;
-      p.py=predictedLocal.py;
-      p.dir=predictedLocal.dir;
-      p.moving=predictedLocal.moving;
-      p.anim=predictedLocal.anim;
-    }
-  }
   bombs=s.bombs.map(b=>({
     ...b, done:false,
     owner:b.oi>=0&&players[b.oi]?players[b.oi]:null,
@@ -1074,42 +1057,6 @@ function update(dt){
   if(shake>0.1) shake*=0.86; else shake=0;
 }
 
-function updateGuestPrediction(dt){
-  if(!players || gameOver) return;
-  const p=players[onlinePlayerIdx];
-  if(!p || !p.alive) return;
-  const dirs=humanDirs[0], dir=dirs[dirs.length-1];
-  if(dir){
-    p.dir=dir;
-    const mult=p.speedTimer>0?SPEEDBOOST_MULT:1;
-    moveDir(p, dir, p.speed*mult*TILE*dt);
-    p.moving=true;
-    p.anim+=dt;
-  } else {
-    p.moving=false;
-  }
-  if(p.authPx!=null && p.authPy!=null){
-    // The auth position is RTT/2 ms stale — project it forward along the
-    // current input direction so reconciliation targets where the server
-    // will agree we are, not where it last saw us.
-    const lagSec = Math.min(0.15, (measuredRtt / 2) / 1000);
-    const [vx,vy] = dir ? DIR_VEC[dir] : [0,0];
-    const spd = p.speed * (p.speedTimer>0?SPEEDBOOST_MULT:1) * TILE;
-    const projX = p.authPx + vx*spd*lagSec;
-    const projY = p.authPy + vy*spd*lagSec;
-    const dx=projX-p.px, dy=projY-p.py;
-    const drift=Math.hypot(dx,dy);
-    if(drift>TILE*3){
-      p.px=p.authPx;
-      p.py=p.authPy;
-    } else if(drift>0.3){
-      const k=dir?0.35:0.5;
-      p.px+=dx*k;
-      p.py+=dy*k;
-    }
-  }
-  human=p;
-}
 function roundScore(p){ return p.kills - p.deaths; }
 function endGame(winner){
   gameOver=true; running=false;
@@ -1441,7 +1388,6 @@ function frame(t){
       socket.emit('ping', {t: performance.now()});
       netLastPingSend=t;
     }
-    updateGuestPrediction(dt);
     if(players){ draw(); renderHud(); updateAbilityUI(); }
   } else {
     if(running && !gameOver) update(dt);
