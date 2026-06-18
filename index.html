@@ -502,7 +502,7 @@ function applyNetState(s){
   bombs=s.bombs.map(b=>({
     ...b, done:false,
     owner:b.oi>=0&&players[b.oi]?players[b.oi]:null,
-    pass:new Set(), countsToLimit:false
+    pass:new Set(b.pass||[]), countsToLimit:false
   }));
   flames=s.flames.map(f=>({...f, owner:null}));
   powerups={...s.powerups};

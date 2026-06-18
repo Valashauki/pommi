@@ -92,6 +92,7 @@ function createGame(settings = {}) {
       bombs: bombs.map((b) => ({
         gx: b.gx, gy: b.gy, fuse: b.fuse, range: b.range, kind: b.kind,
         oi: b.owner ? players.indexOf(b.owner) : -1,
+        pass: b.pass ? [...b.pass] : [],
       })),
       flames: flames.map((f) => ({
         gx: f.gx, gy: f.gy, delay: f.delay, life: f.life, maxLife: f.maxLife,
